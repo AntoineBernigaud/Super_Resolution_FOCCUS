@@ -3,6 +3,9 @@ Super Resolution of sea surface height for the FOCCUS project.
 
 The goal is to increase the resolution of the DUACS data set consisting of full, low resolution fields of SSH with a neural network using the new SWOT SSH fields consisting of sparse, high resolution fields of SSH.
 
+# Usage
+
+Run Testing.ipynb in collab [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AntoineBernigaud/Super_Resolution_FOCCUS/blob/main/Testing.ipynb)
 # Description of this repo
 
 A Conditional Generative Adversarial Network (GAN) was trained on matching pair of DUACS and FOCCUS patches. The architecture was inspired by
