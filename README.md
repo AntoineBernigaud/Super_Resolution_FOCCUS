@@ -10,7 +10,7 @@ Run Testing.ipynb in Binder [![Binder](https://mybinder.org/badge_logo.svg)](htt
 
 # Description of this repo
 
-A Conditional Generative Adversarial Network (CGAN) was trained on matching pairs of DUACS and FOCCUS patches. The architecture was inspired by
+A Conditional Generative Adversarial Network (CGAN) was trained on matching pairs of DUACS and SWOT patches. The architecture was inspired by
 https://jleinonen.github.io/ and is divided into
 
 - data.py the data loader
