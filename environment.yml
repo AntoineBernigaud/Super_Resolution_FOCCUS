@@ -11,6 +11,7 @@ dependencies:
   - tensorflow>=2.4
   - h5py
   - netcdf4
+  - xarray 
   - pip
   - pip:
     - huggingface_hub
