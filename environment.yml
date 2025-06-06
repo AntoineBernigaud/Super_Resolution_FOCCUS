@@ -1,0 +1,22 @@
+name: binder-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - numpy
+  - pandas
+  - matplotlib
+  - scipy
+  - tensorflow>=2.4
+  - h5py
+  - netcdf4
+  - pip
+  - pip:
+    - huggingface_hub
+    - keras
+    - scikit-learn
+    - jupyter
+    - ipywidgets
+    - tqdm
+    - pillow
