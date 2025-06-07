@@ -6,8 +6,7 @@ The goal is to increase the resolution of the DUACS data set consisting of full,
 
 # Usage
 
-Run Testing.ipynb in Binder [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/AntoineBernigaud/Super_Resolution_FOCCUS/HEAD?urlpath=%2Fdoc%2Ftree%2FTesting.ipynb)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AntoineBernigaud/Super_Resolution_FOCCUS/blob/main/Testing.ipynb)
+Run Testing.ipynb in Colab [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AntoineBernigaud/Super_Resolution_FOCCUS/blob/main/Testing.ipynb)
 
 # Description of this repo
 
