@@ -87,6 +87,40 @@ def accumulate(date, GI, GM, acc, args, kfix, GL=None):
                 a["n"] += 1
 
 
+def iter_days(args, mean):
+    """(day, sla_duacs, sla_mu, sla members) for one year, in metres minus `mean`.
+
+    Reads either the merged dataset (--dataset SR_duacs_total.nc, what Zenodo
+    publishes) or the per-day files under product/ (what produce_sr.py writes).
+    """
+    if args.dataset:
+        with Dataset(args.dataset) as ds:
+            ds.set_auto_mask(True)
+            t = np.asarray(ds["time"][:], np.int64)
+            days = np.datetime64("1950-01-01") + t.astype("timedelta64[D]")
+            sel = [i for i, d in enumerate(days)
+                   if int(str(d.astype("datetime64[D]"))[:4]) == args.year]
+            if args.max_days:
+                sel = sel[:args.max_days]
+            for i in sel:
+                yield (days[i].astype("datetime64[D]"),
+                       ds["sla_duacs"][i].filled(np.nan) - mean,
+                       ds["sla_mu"][i].filled(np.nan) - mean,
+                       ds["sla"][i].filled(np.nan) - mean)
+        return
+    files = sorted(Path(args.product, str(args.year)).glob("sr_nordic_sla_*.nc"))
+    if args.max_days:
+        files = files[:args.max_days]
+    for f in files:
+        with Dataset(f) as ds:
+            ds.set_auto_mask(True)
+            yield (np.datetime64("1950-01-01")
+                   + np.timedelta64(int(ds["time"][0]), "D"),
+                   ds["sla_duacs"][0].filled(np.nan) - mean,
+                   ds["sla_mu"][0].filled(np.nan) - mean,
+                   ds["sla"][0].filled(np.nan) - mean)
+
+
 def save(acc, path, **meta):
     out = {}
     for name, a in acc.items():
@@ -102,7 +136,10 @@ def main():
     g.add_argument("--year", type=int)
     g.add_argument("--truth", action="store_true")
     g.add_argument("--combine", action="store_true")
-    ap.add_argument("--product", default="product")
+    ap.add_argument("--product", default="product",
+                    help="directory of per-day files written by produce_sr.py")
+    ap.add_argument("--dataset", default=None,
+                    help="the merged SR_duacs_total.nc instead of --product")
     ap.add_argument("--out", default="validation/plots/full_period/swath")
     ap.add_argument("--lam-min-km", type=float, default=4.0)
     ap.add_argument("--lam-max-km", type=float, default=512.0)
@@ -134,18 +171,9 @@ def main():
 
     # geometry donor: the record day with the same day of year, cycling over years
     rdoy = np.array([(d - d.astype("datetime64[Y]")).astype(int) for d in rec])
-    files = sorted(Path(args.product, str(args.year)).glob("sr_nordic_sla_*.nc"))
-    if args.max_days:
-        files = files[:args.max_days]
     ocean_ok = GL = None
     nday = 0
-    for f in files:
-        with Dataset(f) as ds:
-            ds.set_auto_mask(True)
-            day = np.datetime64("1950-01-01") + np.timedelta64(int(ds["time"][0]), "D")
-            ens = ds["sla"][0].filled(np.nan) - mean
-            mu = ds["sla_mu"][0].filled(np.nan) - mean
-            du = ds["sla_duacs"][0].filled(np.nan) - mean
+    for day, du, mu, ens in iter_days(args, mean):
         if GL is None:
             # keep the cubic stencil off land: the product is NaN there, which rgi
             # would turn into zeros right at the coast

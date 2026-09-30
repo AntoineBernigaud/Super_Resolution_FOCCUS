@@ -2,7 +2,8 @@
 #SBATCH --job-name=sr_fpcomb
 #SBATCH --output=logs/sr_fpcomb.o%j
 #SBATCH --error=logs/sr_fpcomb.e%j
-#SBATCH --account=project_465002856
+# account: export SBATCH_ACCOUNT=project_XXXXXXXXX (not hard-coded here)
+# partitions below are LUMI names -- see README to map them
 #SBATCH --time=00:20:00
 #SBATCH --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=16G
 #SBATCH --partition=debug --gpus=0

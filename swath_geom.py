@@ -1,42 +1,83 @@
-"""Swath geometry lookup: for any date, which passes crossed and where they were.
+"""Swath geometry lookup: for any date, which SWOT passes crossed and where.
 
-The index CSV lists every (date, pass, cycle) in the record and names which of the
-143 copied L3 files carries that pass's latitude/longitude.  Geometry repeats exactly
-from cycle to cycle, so those 143 files describe the sampling on all 828 days -- which
-is what lets the spectra and the transfer be computed on the val and test splits, not
-just the 23 days whose SSH we happen to hold.
+The index is built by scanning the SWOT L3 files that build_dataset.py downloads
+(`downloads/Science`, `downloads_ext/Science`), whose names carry cycle, pass and
+date: SWOT_L3_LR_SSH_Expert_<cycle>_<pass>_<YYYYMMDD>T...  Set $SR_SWOT_DIRS (colon
+separated) to look elsewhere.  If the older
+`swath_geometry/sr_dataset/swath_geometry_index.csv` exists it is used instead: it
+lists every (date, pass) of the record and names which file holds that pass's
+geometry, so it also covers dates whose own files are not on disk.
 
-The CSV has CRLF line endings; python's text mode strips them, a naive split() does
-not, and every filename then fails to match.
+Geometry repeats from cycle to cycle, so a date whose own files were not downloaded
+can borrow another date's passes; `validation/swath_fullperiod.py` does exactly that
+for the pre-SWOT years.
 """
 import csv
+import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 from netCDF4 import Dataset
 
-INDEX = Path("swath_geometry/sr_dataset/swath_geometry_index.csv")
+INDEX = Path("swath_geometry/sr_dataset/swath_geometry_index.csv")   # older layout
 ROOT = Path("swath_geometry")
+FNAME_RE = re.compile(r"SWOT_L3_LR_SSH_Expert_(\d{3})_(\d{3})_(\d{8})T")
+
+
+def swot_dirs():
+    env = os.environ.get("SR_SWOT_DIRS")
+    if env:
+        return [Path(p) for p in env.split(":") if p]
+    return [Path("downloads/Science"), Path("downloads_ext/Science"), ROOT]
 
 
 @lru_cache(maxsize=1)
 def index():
-    """{'YYYY-MM-DD': [(pass, geometry_path), ...]}"""
+    """{'YYYY-MM-DD': [(pass, file, file), ...]}, from the downloaded L3 files.
+
+    The third element is the same file: in the old CSV the geometry and the SSH
+    could live in different files, and callers still unpack three.
+    """
     by_date = {}
-    with open(INDEX, newline="") as fh:
-        for r in csv.DictReader(fh):
-            d = r["date"].strip()
-            key = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
-            by_date.setdefault(key, []).append(
-                (int(r["pass"]), r["geometry_file"].strip(),
-                 r["swot_file"].strip()))
+    if INDEX.exists():
+        # Preferred when present: the CSV lists every (date, pass) in the record and
+        # names which file carries that pass's geometry, so it covers dates whose own
+        # files were never downloaded.  A bare filename scan only covers the dates
+        # actually on disk.
+        with open(INDEX, newline="") as fh:
+            for r in csv.DictReader(fh):
+                d = r["date"].strip()
+                key = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+                by_date.setdefault(key, []).append(
+                    (int(r["pass"]), r["geometry_file"].strip(), r["swot_file"].strip()))
+        return by_date
+    for d in swot_dirs():
+        if not d.is_dir():
+            continue
+        for f in sorted(d.rglob("*.nc")):
+            m = FNAME_RE.search(f.name)
+            if not m:
+                continue
+            day = m.group(3)
+            key = f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+            row = (int(m.group(2)), str(f), str(f))
+            if row not in by_date.setdefault(key, []):
+                by_date[key].append(row)
     return by_date
 
 
 @lru_cache(maxsize=1)
 def _paths():
-    return {p.name: p for p in ROOT.rglob("*.nc")}
+    """{name or path: path} -- callers pass whichever the index gave them."""
+    out = {}
+    for d in swot_dirs():
+        if d.is_dir():
+            for p in d.rglob("*.nc"):
+                out[p.name] = p
+                out[str(p)] = p
+    return out
 
 
 @lru_cache(maxsize=256)

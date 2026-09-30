@@ -3,12 +3,19 @@
 *.nc.tmp
 *.npy
 /patch_index.npz
-/norm_stats.npz
 /swath_geometry/
+/downloads/
+/downloads_ext/
+/duacs_ext/
+/sr_dataset/
 /archive*/
 /product/
 /product_test/
 /SR_duacs_total*
+*.crc.json
+
+# norm_stats.npz is NOT ignored: two numbers, part of the trained model, and
+# inference needs them without the training dataset
 
 # ---- model weights: publish with the dataset on Zenodo (best.pt is 94.5 MB) ----
 *.pt

@@ -46,6 +46,7 @@ import numpy as np
 import torch
 
 import config as C
+from device import amp, get_device
 import edm
 from data import FullFieldDataset, load_stats, eval_box_slices
 from nets import baseline_from_ckpt, DiffusionUNet
@@ -115,7 +116,7 @@ def main():
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    dev = torch.device("cuda")
+    dev = get_device()
     mean, std = load_stats()
 
     bck = torch.load(args.baseline, map_location="cpu", weights_only=False)
@@ -157,7 +158,7 @@ def main():
         x = b["x"][None].to(dev)
         y = b["y"][None].to(dev)
         m = b["mask"][None].to(dev)
-        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.no_grad(), amp(dev):
             mu = base(x).float()
         r0 = ((y - mu) * m) / r_scale
 

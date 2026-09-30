@@ -25,10 +25,6 @@ sanity check; these are the metrics that carry the argument.
      fine scale than SSH itself.  If the model invents plausible SSH texture with the
      wrong gradient statistics, this is where it shows.
 
-  4. Fractions Skill Score at a range of neighbourhood sizes -- the standard
-     displacement-tolerant score.  The neighbourhood at which FSS becomes useful is a
-     direct estimate of the position error.
-
 All of these run on the sparse target: only observed pixels contribute, and the
 spectral estimates use segments where the truth is fully valid.
 """
@@ -181,43 +177,6 @@ def geostrophic_speed(eta_m, lat_deg, valid=None):
     return speed
 
 
-# --------------------------------------------------------------------------------
-# 4. fractions skill score
-# --------------------------------------------------------------------------------
-def fss(pred, truth, valid, threshold, scales_px=(1, 3, 9, 27, 81)):
-    """Fractions Skill Score over square neighbourhoods.
-
-    The displacement-tolerant score: a feature displaced by less than the
-    neighbourhood still counts as a hit, so the scale at which FSS climbs towards 1
-    estimates the model's position error.  Fractions are computed over valid pixels
-    only, so gaps neither count as hits nor as misses.
-    """
-    from scipy.ndimage import uniform_filter
-
-    v = valid.astype(np.float64)
-    bp = ((pred > threshold) & valid).astype(np.float64)
-    bt = ((truth > threshold) & valid).astype(np.float64)
-    out = {}
-    for n in scales_px:
-        if n == 1:
-            fp, ft, w = bp, bt, v
-        else:
-            k = dict(size=n, mode="constant", cval=0.0)
-            w = uniform_filter(v, **k)
-            fp = uniform_filter(bp, **k)
-            ft = uniform_filter(bt, **k)
-        use = w > 0.5                       # windows at least half observed
-        if use.sum() == 0:
-            out[n] = float("nan")
-            continue
-        p = (fp[use] / w[use])
-        t = (ft[use] / w[use])
-        num = ((p - t) ** 2).mean()
-        den = (p ** 2).mean() + (t ** 2).mean()
-        out[n] = float(1 - num / den) if den > 0 else float("nan")
-    return out
-
-
 def summarise(sample, mu, truth, valid, lat_deg, std_m, ens=None):
     """Everything above for one day, in physical units.  `sample`, `mu`, `truth` are
     in normalised units; `std_m` converts to metres."""
@@ -244,9 +203,6 @@ def summarise(sample, mu, truth, valid, lat_deg, std_m, ens=None):
     both = np.isfinite(sp_t)
     out["ug_rms_truth_cms"] = float(100 * np.sqrt((sp_t[both] ** 2).mean()))
 
-    thr = np.percentile(truth[v], 90)
-    out["fss_sample"] = fss(sample, truth, v, thr)
-    out["fss_mu"] = fss(mu, truth, v, thr)
 
     if ens is not None and ens.shape[0] > 1:
         e = ens[:, v] * std_m * 100          # cm

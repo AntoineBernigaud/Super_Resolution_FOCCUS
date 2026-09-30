@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 import config as C
+from device import amp, get_device
 from data import FullFieldDataset, load_stats
 from nets import BaselineNet, block_repeat
 
@@ -67,14 +68,14 @@ def main():
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    dev = torch.device("cuda")
+    dev = get_device()
     mean, std = load_stats()
     print(json.dumps(vars(args), indent=2))
     print(f"normalisation: mean {mean:+.6f}  std {std:.6f} m")
 
-    # Stage 1 trains on WHOLE fields, not patches.  Two reasons, both measured by
-    # smoke_test.py's receptive-field probe, which reports 128x304 coarse cells --
-    # the entire grid:
+    # Stage 1 trains on WHOLE fields, not patches.  Two reasons, both measured: a
+    # receptive-field probe by backprop reports 128x304 coarse cells -- the entire
+    # grid:
     #   * the convolutional stack alone reaches 1 + 13*2 = 27 coarse cells, already
     #     more than twice a patch's 12-cell height, so a patch-trained net would
     #     lean on zero padding that is absent at full-field inference;
@@ -112,7 +113,7 @@ def main():
             for g in opt.param_groups:
                 g["lr"] = lr_at(step, total, args.lr, warmup)
             x = b["x"].to(dev, non_blocking=True)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with amp(dev):
                 pred = net(x)
             pred = pred.float()
             y = b["y"].to(dev, non_blocking=True)
@@ -136,7 +137,7 @@ def main():
                 x = b["x"].to(dev, non_blocking=True)
                 y = b["y"].to(dev, non_blocking=True)
                 m = b["mask"].to(dev, non_blocking=True)
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+                with amp(dev):
                     pred = net(x).float()
                 triv = block_repeat(x[:, :1])
                 se_net += (((pred - y) ** 2) * m).sum().item()

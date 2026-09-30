@@ -1,10 +1,37 @@
 """Shared constants.  Every script imports from here so the grid geometry, the
 patch tiling and the temporal split cannot drift apart between stages.
 """
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-NC = ROOT / "sr_duacs_to_swot.nc"
+
+
+def _dataset():
+    """The DUACS->SWOT training dataset written by build_dataset.py.
+
+    build_dataset.py puts the period in the name (sr_dataset/sr_duacs_to_swot_
+    20230726_20251117.nc), so the exact filename depends on DATE_START/DATE_END.
+    Resolution order: $SR_DATASET, then sr_dataset/sr_duacs_to_swot.nc, then the
+    newest sr_dataset/sr_duacs_to_swot*.nc, then the repo root (older layout).
+    Nothing is raised here -- config is imported by every script, including the
+    ones that do not need the dataset at all.
+    """
+    env = os.environ.get("SR_DATASET")
+    if env:
+        return Path(env)
+    exact = ROOT / "sr_dataset" / "sr_duacs_to_swot.nc"
+    if exact.exists():
+        return exact
+    # sorted(): the date range is in the name, so the last one covers the widest
+    # or most recent period
+    cand = sorted((ROOT / "sr_dataset").glob("sr_duacs_to_swot*.nc"))
+    if cand:
+        return cand[-1]
+    return ROOT / "sr_duacs_to_swot.nc"
+
+
+NC = _dataset()
 PATCH_INDEX = ROOT / "patch_index.npz"
 STATS = ROOT / "norm_stats.npz"
 CACHE_SSHA = ROOT / "cache_ssha.npy"

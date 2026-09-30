@@ -2,7 +2,8 @@
 #SBATCH --job-name=sr_merge
 #SBATCH --output=logs/sr_merge.o%j
 #SBATCH --error=logs/sr_merge.e%j
-#SBATCH --account=project_465002856
+# account: export SBATCH_ACCOUNT=project_XXXXXXXXX (not hard-coded here)
+# partitions below are LUMI names -- see README to map them
 #SBATCH --time=20:00:00
 #SBATCH --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=16G
 #SBATCH --partition=small --gpus=0

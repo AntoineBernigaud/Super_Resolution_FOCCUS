@@ -2,7 +2,8 @@
 #SBATCH --job-name=sr_produce
 #SBATCH --output=logs/sr_produce_%a.o%j
 #SBATCH --error=logs/sr_produce_%a.e%j
-#SBATCH --account=project_465002856
+# account: export SBATCH_ACCOUNT=project_XXXXXXXXX (not hard-coded here)
+# partitions below are LUMI names -- see README to map them
 #SBATCH --time=40:00:00
 #SBATCH --nodes=1 --ntasks=1 --cpus-per-task=7 --mem=56G
 #SBATCH --partition=small-g --gpus=1

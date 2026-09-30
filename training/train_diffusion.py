@@ -25,6 +25,7 @@ import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 import config as C
+from device import amp, get_device
 import edm
 from data import PatchDataset, load_stats
 from nets import DiffusionUNet
@@ -106,7 +107,7 @@ def main():
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    dev = torch.device("cuda")
+    dev = get_device()
     mean, std = load_stats()
     print(f"sigma distribution: P_MEAN {edm.P_MEAN} P_STD {edm.P_STD} "
           f"SIGMA_DATA {edm.SIGMA_DATA}")
@@ -159,7 +160,7 @@ def main():
             for g in opt.param_groups:
                 g["lr"] = lr_at(step, total, args.lr, warmup)
             r0, m, mu, x = prep(b)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with amp(dev):
                 loss = edm.edm_loss(net, r0, m, mu, x, obs_mask=m)
             opt.zero_grad(set_to_none=True)
             loss.float().backward()
@@ -181,7 +182,7 @@ def main():
             for b in dl_va:
                 r0, m, mu, x = prep(b)
                 torch.manual_seed(int(torch.randint(0, 2**31, (1,), generator=g)))
-                with torch.autocast("cuda", dtype=torch.bfloat16):
+                with amp(dev):
                     vl += edm.edm_loss(ema.shadow, r0, m, mu, x,
                                        obs_mask=m).item()
                 nb += 1

@@ -18,18 +18,20 @@ Note on the branches: the original version (CGAN) is in the CGAN branch. With mo
 
     config.py data.py nets.py edm.py ...   shared modules
     inflation.py                           scale-selective inflation (validation + production)
-    training/                              build, train, smoke-test + their jobs
+    regions.py  device.py                  scoring regions; CPU/GPU selection
+    build_dataset.py + KaRIn_*.geojson     the producer of the training dataset
+    training/                              build caches and target, train, mu + their jobs
     production/                            the super-resolved 1993-2026 dataset
     validation/                            archive, diagnostics + their jobs
     validation/plots/lam<L>/               one directory per inflation lambda
-    *.npy *.nc swath_geometry/ runs/       SYMLINKS into FOCCUS_C_V0 (nothing copied)
+    notebooks/view_day.ipynb               one day: maps, currents, KE, flags, RMSE
 
-Data is symlinked, not duplicated: the caches alone are 1.5 GB each and the swath
-geometry is 1.2 GB.
+The data itself is not in the repository (see below); the paths above are where the
+jobs expect to find or write it.
 
 ## Running
 
-    sbatch training/job_chkpaths.sh      # paths + imports + smoke test.  Run first.
+    python build_dataset.py all          # -> sr_dataset/sr_duacs_to_swot_<period>.nc
     sbatch training/job_index.sh         # patch_index.npz + norm_stats.npz
     sbatch training/job_target.sh        # cache_ssha_wh.npy
     sbatch training/job_baseline.sh      # stage 1  -> runs/baseline_whitened
@@ -41,17 +43,32 @@ geometry is 1.2 GB.
     sbatch validation/job_validate.sh 3.3
     sbatch validation/job_validate.sh 1.0    # uninflated
 
-`job_index` must precede everything; `job_mu` must run between the two stages.
+`build_dataset.py` must run first of all (it downloads SWOT from AVISO and DUACS from
+Copernicus Marine and grids them); then `job_index`; and `job_mu` between the two
+training stages.  Without SLURM, each job script is a header plus one
+`srun python ...` line -- run that line directly.
+
+Two checks, on the produced data rather than on the code:
+
+    sbatch production/job_check_record.sh    # every day present once, openable, right
+                                             # shapes, no gaps, sane per-year statistics
+    sbatch production/job_merge.sh --verify  # the merged file against the per-day
+                                             # checksums -- run BEFORE deleting product/
 
 ## Details
 
 - `sigma_max` is an optimized hyper-parameter, fitted with
-`validation/diag_patch_psd.py --sigma-max`.
+`validation/diag_patch_psd.py --sigma-max`.  It belongs to the TRAINED NETWORK, not
+to the target: it is fitted by matching that network's 10-60 km power to the
+target's, and three trainings of this architecture needed 13, 16 and 11.  Re-fit it
+after any retraining, before building an archive, or the comparison is confounded.
 
 - There are three possible value for the inflation parameter lambda:
       - lambda = 3.3 flattens the the rank-histogram (option retained for the production of the fully super-resolved dataset).
       - lambda = 4.6 minimizes the spread-skill.
-      - lambda = 5 minimizes the CRPS do not agree, and that is the point.**  CRPS is minimised at 5.0.
+      - lambda = 5 minimizes the CRPS.
+  The three criteria do not agree on one width, which is itself the finding: a
+  correctly shaped ensemble would calibrate all three at the same lambda.
 
 - Each member uses a fix random noise across days to maintain coherence over time.
 
@@ -59,8 +76,10 @@ geometry is 1.2 GB.
 
     sbatch production/job_produce.sh     # full record, ~442 GPU-hours
 
-Input `DUACS_full.nc`: DUACS L4 `sla`, 1993-01-01 .. 2026, 12,069 days
-Output `product/YYYY/sr_nordic_sla_YYYYMMDD.nc`,
+Input `DUACS_full.nc`: DUACS L4 `sla`, 1993-01-01 .. 2026, 12,069 days.
+Output `product/YYYY/sr_nordic_sla_YYYYMMDD.nc` (~9.7 MB/day), merged by
+`sbatch production/job_merge.sh` into the single `SR_duacs_total.nc` (~108 GB)
+published on Zenodo.
 
 | variable | dims | content |
 |---|---|---|
@@ -87,20 +106,51 @@ Output `product/YYYY/sr_nordic_sla_YYYYMMDD.nc`,
 | `SR_duacs_total.nc` | ~108 GB | the super-resolved dataset -- Zenodo |
 | `runs/*/best.pt` | 8.5 MB + 94.5 MB | trained stage-1 / stage-2 weights -- Zenodo |
 | `DUACS_full.nc` | 1.2 GB | CMEMS `cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D`, `sla`, 62-78N, 18W-20E |
-| `sr_duacs_to_swot.nc` | 0.8 GB | DUACS/SWOT training pairs, built by the producer pipeline (see its dataset README) |
-| `swath_geometry/` | 1.2 GB | SWOT L3 LR SSH Expert v2.0.1 pass files (AVISO) + `swath_geometry_index.csv` |
-| `cache_*.npy`, `mu_whitened.npy`, `patch_index.npz`, `norm_stats.npz` | ~4.5 GB | regenerated: `training/job_index.sh`, `job_target.sh`, `job_mu.sh` |
+| `sr_dataset/sr_duacs_to_swot_<period>.nc` | 0.8 GB | DUACS/SWOT training pairs: `python build_dataset.py all` |
+| `downloads*/Science/` | ~1.2 GB | SWOT L3 LR SSH Expert v2.0.1 passes, downloaded by the same command; kept, because the swath geometry is read from them |
+| `cache_*.npy`, `mu_whitened.npy`, `patch_index.npz` | ~4.5 GB | regenerated: `training/build_cache.py`, `job_index.sh`, `job_target.sh`, `job_mu.sh` |
 | `archive_*/`, `validation/plots/*/daily/` | ~6 GB | regenerated: `validation/job_archive.sh`, `job_validate.sh` |
 
-The small results needed to rebuild the target and the summary figures ARE included:
+`norm_stats.npz` IS included (2.4 KB): it holds the normalisation constants the
+network was trained with, so inference works without the training dataset.  So are
+the small results needed to rebuild the target, and the summary figures:
 `runs/native_vs_collocated/native_vs_collocated.json` (the measured gridding artifact
 the whitened target is built from), the training histories, and every validation
 figure except the daily maps.
 
 ## Running outside LUMI
 
-The job scripts are SLURM scripts for LUMI.  Two things are site-specific:
-`env.sh` (the CSC `pytorch` module and a venv providing `xarray`/`netCDF4`), and the
-`#SBATCH --account=` / `--partition=` lines (LUMI project and `small-g` / `small` /
-`debug` partitions).  Adapt those two; nothing else assumes LUMI.  Python
-dependencies: `torch`, `numpy`, `scipy`, `netCDF4`, `xarray`, `matplotlib`.
+Python 3.11, `pip install -r requirements.txt`.  Install `torch` first, matching your
+accelerator (ROCm / CUDA / CPU wheels -- see the top of that file).  `device.py`
+selects the GPU when there is one and falls back to the CPU with autocast off, so
+nothing is hard-wired to AMD.
+
+Three site-specific things, all outside the python:
+
+- **The SLURM account** is not in the job scripts: `export SBATCH_ACCOUNT=project_XXXXXXXXX`.
+- **The partitions** `small-g` (1 GPU), `small` (CPU) and `debug` (CPU, short) are
+  LUMI names -- edit the `#SBATCH --partition=` lines.
+- **`env.sh`** has a SITE block at the top: `SR_MODULEPATH` / `SR_MODULES` for a module
+  system, `SR_VENV` / `SR_PY` for a venv or conda prefix, `SR_TMP` for scratch.  Set the
+  module and venv variables to empty if python is already on PATH.  The `MIOPEN_*`
+  variables matter on AMD only and are harmless elsewhere.
+
+One GPU with >= 32 GB is comfortable (stage 2 trains at batch 32 on 96x96 patches);
+full-field sampling is tiled and fits in much less.
+
+## Using the published dataset without running the model
+
+Downloading `SR_duacs_total.nc` from Zenodo is enough to look at the product and to
+recompute its spectra and cross-scale transfer -- no GPU, no weights, no training data:
+
+    jupyter lab notebooks/view_day.ipynb                       # set DAY, run all
+    python validation/swath_fullperiod.py --dataset SR_duacs_total.nc --year 2020
+    python validation/swath_fullperiod.py --combine
+
+Scoring it against SWOT additionally needs the training dataset, since SWOT is the
+truth.  With that in place, turn dataset days into the archive format every
+diagnostic reads:
+
+    python validation/archive_from_dataset.py --dataset SR_duacs_total.nc \
+           --split test --days 40 --out archive_wh13
+    sbatch validation/job_validate.sh 1.0    # its members are ALREADY inflated at 3.3

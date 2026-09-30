@@ -28,7 +28,7 @@ import numpy as np
 
 import config as C
 from data import load_stats
-from fss_analysis import REGIONS, region_slices
+from regions import REGIONS, region_slices
 
 
 def main():

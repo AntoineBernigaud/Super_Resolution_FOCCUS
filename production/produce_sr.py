@@ -38,6 +38,7 @@ from netCDF4 import Dataset
 from scipy.ndimage import distance_transform_edt
 
 import config as C
+from device import amp, get_device
 import edm
 from data import load_stats
 from inflation import DY_KM, inflate_large
@@ -242,7 +243,7 @@ def main():
     args = ap.parse_args()
 
     edm.SIGMA_MAX = args.sigma_max
-    dev = torch.device("cuda")
+    dev = get_device()
     mean, std = load_stats()
     base, net, r_scale, bck, dck = load_models(args.baseline, args.diffusion, dev)
 
@@ -315,7 +316,7 @@ def main():
         xc = np.where(m_x, (np.nan_to_num(sla, nan=0.0) - mean) / std, 0.0)
         x = torch.from_numpy(np.stack([xc, m_x.astype(np.float32)])
                              .astype(np.float32))[None].to(dev)
-        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.no_grad(), amp(dev):
             mu = base(x).float()
         ens = []
         for e in range(args.members):

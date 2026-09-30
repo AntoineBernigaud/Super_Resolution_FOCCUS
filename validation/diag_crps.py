@@ -1,6 +1,6 @@
 """Score the ensemble with a metric that is fair to an ensemble.
 
-FSS and RMSE are DETERMINISTIC scores applied to a probabilistic product.  A single
+RMSE is a DETERMINISTIC score applied to a probabilistic product.  A single
 member puts full-amplitude structure where the truth does not have it, so it takes a
 false alarm and a miss for the same feature -- penalised twice for having the right
 variance, while a smooth field is never penalised for making no small-scale claim.
@@ -28,7 +28,7 @@ import numpy as np
 import config as C
 from data import load_stats
 from metrics import crps_ensemble, rank_histogram
-from fss_analysis import REGIONS, region_slices
+from regions import REGIONS, region_slices
 
 
 def diagnose_ranks(rh):

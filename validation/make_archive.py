@@ -1,6 +1,6 @@
 """Sample the parent (DUACS-only) model over many test days and archive the result.
 
-Both the FSS and the cross-scale-transfer analyses need an ensemble on a large number
+The cross-scale-transfer and spectral analyses need an ensemble on a large number
 of days.  Sampling dominates the cost (~45 s per full-field member), so it is done
 once here and written to disk; the analyses then run in minutes and can be re-run
 freely as the diagnostics evolve.
@@ -14,6 +14,7 @@ import torch
 from pathlib import Path
 
 import config as C
+from device import amp, get_device
 import edm
 from data import FullFieldDataset, load_stats
 from nets import baseline_from_ckpt, BaselineNet, DiffusionUNet
@@ -77,7 +78,7 @@ def main():
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    dev = torch.device("cuda")
+    dev = get_device()
     mean, std = load_stats()
 
     bck = torch.load(args.baseline, map_location="cpu", weights_only=False)
@@ -114,7 +115,7 @@ def main():
 
 def _run(ds, pick, cov, base, net, r_scale, args, out):
     import torch
-    dev = torch.device("cuda")
+    dev = get_device()
     for n, k in enumerate(pick):
         b = ds[int(k)]
         date = str(ds.dates[ds.t[int(k)]])
@@ -123,7 +124,7 @@ def _run(ds, pick, cov, base, net, r_scale, args, out):
             print(f"  [{n+1}/{len(pick)}] {date} exists, skipping", flush=True)
             continue
         x = b["x"][None].to(dev)
-        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.no_grad(), amp(dev):
             mu = base(x).float()
         # AR(1)/fixed need the days in chronological order and state carried between
         # them; _run() iterates `pick` in the order given, which make_archive sorts.

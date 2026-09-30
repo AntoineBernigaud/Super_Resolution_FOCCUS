@@ -15,6 +15,7 @@ import numpy as np
 import torch
 
 import config as C
+from device import amp, get_device
 from data import FullFieldDataset, load_stats
 from nets import BaselineNet
 
@@ -39,7 +40,7 @@ def main():
     if Path(args.out).exists() and not args.force:
         raise SystemExit(f"{args.out} exists -- pass --force, or use a per-run name")
 
-    dev = torch.device("cuda")
+    dev = get_device()
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     net = BaselineNet(ck["args"]["width"], ck["args"]["fine_width"],
                       base=ck["args"].get("base", "block"),
@@ -59,7 +60,7 @@ def main():
         for k in range(len(ds)):
             b = ds[k]
             x = b["x"][None].to(dev)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with amp(dev):
                 mu = net(x).float()
             mm[k] = mu[0, 0].cpu().numpy().astype(np.float16)
             m = b["mask"][None].to(dev)
