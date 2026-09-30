@@ -6,46 +6,60 @@ resolves ~150 km) with a neural network using the SWOT SSH fields consisting of 
 
 Note on the branches: the original version (CGAN) is in the CGAN branch. With more SWOT data being available, the training of a diffusion model has become possible and allowed to fix the discontinuities between the patches produced by the CGAN. Indeed, with a diffusion model we can use a global diffusion process to make sure the final, full reconstruction is consistent. To do this the patches are chosen with an overlap, and at each step of the de-noising process, for each overlap, the predicted noise to be removed is an average of the predicted noise coming from each tile. This way, the overlapping prediction is pushed to being the same for both patches (while also being consistent with the rest of each patch).
 
-## The configuration
+## Training and production steps
 
-    target        cache_ssha_wh.npy      The SWOT data are whitened (the power across spatial frequencies is equalized)
-    stage 1       runs/baseline_whitened   Outputs a deterministic field mu
-    stage 2       runs/diffusion_whitened  EDM diffusion on the residuals r = y - mu
-    sampling      --sigma-max 13 --steps 32 --noise-mode fixed --center-residual
-    calibration   inflation of the EDM members post-hoc, scale-selective: --above-km 200, lambda 3.3
+5 main steps to reach the final dataset:
 
-## Layout
+    pre-processing        cache_ssha_wh.npy      The SWOT data are whitened (the power across spatial frequencies is equalized)
+    stage 1 (deterministic prediction)       runs/baseline_whitened   Outputs a (deterministic) field mu. Only the predictable parts of the input (corresponding to the largest scales) are corrected by this step.
+    stage 2 (stochastic prediction)       runs/diffusion_whitened  EDM diffusion on the residuals r = SWOT - mu. Realistic features are generated over the unpredictable parts of the input. 
+    sampling      Different possible outputs (also called realizations or members) are generated with parameters --sigma-max 13 --steps 32 --noise-mode fixed --center-residual.
+    calibration   Inflation of the EDM members above 200 km with parameter lambda 3.3
 
-    config.py data.py nets.py edm.py ...   shared modules
-    inflation.py                           scale-selective inflation (validation + production)
-    regions.py  device.py                  scoring regions; CPU/GPU selection
-    build_dataset.py + KaRIn_*.geojson     the producer of the training dataset
+## Structure of the repo
+
+    build_dataset.py                       the producer of the training dataset
     training/                              build caches and target, train, mu + their jobs
-    production/                            the super-resolved 1993-2026 dataset
+    production/                            Used to produce the super-resolved 1993-2026 dataset
     validation/                            archive, diagnostics + their jobs
     validation/plots/lam<L>/               one directory per inflation lambda
     notebooks/view_day.ipynb               one day: maps, currents, KE, flags, RMSE
 
-No data is in the repository; the paths above are where the jobs expect to find or
-write it.  `norm_stats.npz` is the exception and is tracked: two constants, part of
-the trained model (see step 1).
-
-## Installing
-
-Python 3.11, then `pip install -r requirements.txt`.  Install `torch` first, matching
-your accelerator (ROCm / CUDA / CPU wheels -- see the top of that file).  `device.py`
-uses the GPU when there is one and falls back to the CPU with autocast off.
-
-Credentials: `build_dataset.py` downloads SWOT from the AVISO FTP (`AVISO_USER`,
-`AVISO_PASS`) and DUACS from Copernicus Marine (`copernicusmarine login`, or
-`COPERNICUSMARINE_SERVICE_USERNAME` / `_PASSWORD`).
-
+The SWOT and DUACS data can be downloaded using build_dataset.py. 
 The trained weights (`runs/baseline_whitened/best.pt`, 8.5 MB, and
-`runs/diffusion_whitened/best.pt`, 94.5 MB) and the finished product
-(`SR_duacs_total.nc`, ~108 GB) are on Zenodo; no data is in this repository.
+`runs/diffusion_whitened/best.pt`, 94.5 MB) are on Zenodo;
+The fully super-resolved dataset is available on Zenodo.
 
-Every job script below is a SLURM header plus a single `srun python ...` line, so
-without SLURM just run that line.
+## Dependencies and running outside of LUMI
+
+Requires torch and Python 3.11.
+Dependencies can be install with
+pip install -r requirements.txt
+
+Every job script is a SLURM header plus a single `srun python ...` line, so
+without SLURM you can just run that line. To submit a job on a supercomputer, adapt:
+- **The SLURM account** (not in the job scripts): `export SBATCH_ACCOUNT=project_XXXXXXXXX`.
+- **The partitions**: One GPU with >= 32 GB is comfortable (stage 2 trains at batch 32 on 96x96 patches);
+full-field sampling is tiled and fits in much less.
+- **`env.sh`** has a SITE block at the top: `SR_MODULEPATH` / `SR_MODULES` for a module
+  system, `SR_VENV` / `SR_PY` for a venv or conda prefix, `SR_TMP` for scratch.  Set the
+  module and venv variables to empty if python is already on PATH.  The `MIOPEN_*`
+  variables matter on AMD only and are harmless elsewhere.
+
+## 0. Building the dataset
+
+First modify the first arguments in build_dataset.py. The values by default where the one used for the production of the final dataset.
+- TEST_ONLY can be set to True to only download data during the testing period defined by TEST_START and TEST_END.
+- If TEST_ONLY is set to False, it will download the data between the dates DATE_START and DATE_END.
+- LON_RANGE and LAT_RANGE to select the area of your choice.
+- DOWNLOAD_SWOT and DOWNLOAD_DUACS can be set to 1 to download the corresponding data and 0 otherwise.
+- To download from CMEMS (for DUACS) and AVISO (for SWOT) you need to enter you credentials in:
+AVISO_USER = ""
+AVISO_PASS = ""
+CMEMS_USER = ""
+CMEMS_PASS = ""
+
+build_dataset.py can then called with python 'build_dataset.py all'.
 
 ## 1. Try the network on a short period
 
@@ -54,7 +68,7 @@ look at the result.  No training -- it uses the published weights.
 
     # in build_dataset.py set TEST_ONLY = True (and TEST_START / TEST_END), then
     python build_dataset.py all              # -> sr_dataset/sr_duacs_to_swot_<period>.nc
-    sbatch training/job_index.sh             # patch_index.npz (keeps norm_stats.npz)
+    sbatch training/job_index.sh             # patch_index.npz (will use the precomputed statistics of the training period for normalization in norm_stats.npz)
     python training/build_cache.py           # cache_ssha.npy, cache_sla.npy
     sbatch training/job_target.sh            # cache_ssha_wh.npy
     sbatch training/job_mu.sh                # mu_whitened.npy, from the downloaded stage 1
@@ -62,39 +76,30 @@ look at the result.  No training -- it uses the published weights.
     sbatch validation/job_validate.sh 3.3    # -> validation/plots/lam3.3/
     jupyter lab notebooks/view_day.ipynb     # set DAY, run all
 
-Keep `norm_stats.npz` as it ships: it holds the constants the published weights were
-trained with, and `job_index` no longer overwrites it.  A short period has its own
-mean and standard deviation, and normalising with those would feed the network
-something it was never trained on.
-
 ## 2. Retrain the model
 
 Build the full record (`TEST_ONLY = False`, `DATE_START` / `DATE_END` in
-`build_dataset.py`), then compute your own normalisation, because now the constants
-must match the data you train on:
+`build_dataset.py`)
 
     python build_dataset.py all
-    sbatch training/job_index.sh --recompute-stats
+    sbatch training/job_index.sh --recompute-stats # Will recompute normalizations statistics in norm_stats.npz)
     python training/build_cache.py
     sbatch training/job_target.sh            # whitened target (the one that works)
     sbatch training/job_baseline.sh          # stage 1 -> runs/baseline_whitened
-    sbatch training/job_mu.sh                # mu over the record   (BETWEEN the stages)
+    sbatch training/job_mu.sh                # mu over the record
     sbatch training/job_diffusion.sh         # stage 2 -> runs/diffusion_whitened
-    for S in 10 13 16 20; do                 # re-fit sigma_max -- not optional
+    for S in 10 13 16 20; do                 # re-fit sigma_max
         python validation/diag_patch_psd.py --sigma-max $S --out psd_smax$S
     done
     sbatch validation/job_archive.sh         # -> archive_wh13
     sbatch validation/job_validate.sh 3.3
-
-`job_index` first, `job_mu` between the two training stages.  Re-fitting `sigma_max`
-is not optional -- see Details.
 
 ## 3. Validate
 
 `job_validate.sh <lambda>` runs the whole suite on an archive and writes
 `validation/plots/lam<lambda>/`: CRPS and rank histograms, RMSE, coherence with SWOT,
 swath-geometry spectra and cross-scale transfer, bicoherence, the offset diagnostics
-and daily maps.  It inflates the archive itself, so give it the lambda you want.
+and daily maps.  Lambda being the inflation parameter.
 
 Spectra and cross-scale transfer pooled over the whole record:
 
@@ -103,7 +108,7 @@ Spectra and cross-scale transfer pooled over the whole record:
     sbatch validation/job_fullperiod_combine.sh
 
 If you downloaded `SR_duacs_total.nc` instead of running the model, everything above
-still works -- no GPU, no weights.  Turn its days into the archive format first:
+still works.  Turn its days into the archive format first:
 
     python validation/archive_from_dataset.py --dataset SR_duacs_total.nc \
            --split test --days 40 --out archive_wh13
@@ -113,42 +118,17 @@ still works -- no GPU, no weights.  Turn its days into the archive format first:
 Scoring against SWOT needs the training dataset too, since SWOT is the truth; the
 notebook and the spectra work without it.
 
-## 4. Produce the full dataset
-
-`production/` holds the scripts that made the published 1993-2026 product from
-`DUACS_full.nc` (`job_produce.sh`, then `job_merge.sh` to merge the per-day files
-into `SR_duacs_total.nc`, plus two integrity checks).  It is ~442 GPU-hours and
-~108 GB; the result is on Zenodo, so you only need this to rebuild it.
-
 ## Details
 
 - `sigma_max` is an optimized hyper-parameter, fitted with
-`validation/diag_patch_psd.py --sigma-max`.  It belongs to the TRAINED NETWORK, not
-to the target: it is fitted by matching that network's 10-60 km power to the
-target's, and three trainings of this architecture needed 13, 16 and 11.  Re-fit it
-after any retraining, before building an archive, or the comparison is confounded.
+`validation/diag_patch_psd.py --sigma-max`. Tt is fitted by matching that network's 10-60 km power to the
+target's.
 
 - There are three possible value for the inflation parameter lambda:
       - lambda = 3.3 flattens the rank-histogram (option retained for the production of the fully super-resolved dataset).
       - lambda = 4.6 minimizes the spread-skill.
       - lambda = 5 minimizes the CRPS.
-  The three criteria do not agree on one width, which is itself the finding: a
-  correctly shaped ensemble would calibrate all three at the same lambda.
 
-- Each member uses a fix random noise across days to maintain coherence over time.
+- During inference, each member uses a fix random noise across days to maintain coherence over time.
 
-## Running outside LUMI
 
-Nothing in the python is hard-wired to AMD or to LUMI.  Three site-specific things,
-all outside it:
-
-- **The SLURM account** is not in the job scripts: `export SBATCH_ACCOUNT=project_XXXXXXXXX`.
-- **The partitions** `small-g` (1 GPU), `small` (CPU) and `debug` (CPU, short) are
-  LUMI names -- edit the `#SBATCH --partition=` lines.
-- **`env.sh`** has a SITE block at the top: `SR_MODULEPATH` / `SR_MODULES` for a module
-  system, `SR_VENV` / `SR_PY` for a venv or conda prefix, `SR_TMP` for scratch.  Set the
-  module and venv variables to empty if python is already on PATH.  The `MIOPEN_*`
-  variables matter on AMD only and are harmless elsewhere.
-
-One GPU with >= 32 GB is comfortable (stage 2 trains at batch 32 on 96x96 patches);
-full-field sampling is tiled and fits in much less.
