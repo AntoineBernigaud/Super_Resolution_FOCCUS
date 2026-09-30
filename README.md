@@ -26,34 +26,99 @@ Note on the branches: the original version (CGAN) is in the CGAN branch. With mo
     validation/plots/lam<L>/               one directory per inflation lambda
     notebooks/view_day.ipynb               one day: maps, currents, KE, flags, RMSE
 
-The data itself is not in the repository (see below); the paths above are where the
-jobs expect to find or write it.
+No data is in the repository; the paths above are where the jobs expect to find or
+write it.  `norm_stats.npz` is the exception and is tracked: two constants, part of
+the trained model (see step 1).
 
-## Running
+## Installing
 
-    python build_dataset.py all          # -> sr_dataset/sr_duacs_to_swot_<period>.nc
-    sbatch training/job_index.sh         # patch_index.npz + norm_stats.npz
-    sbatch training/job_target.sh        # cache_ssha_wh.npy
-    sbatch training/job_baseline.sh      # stage 1  -> runs/baseline_whitened
-    sbatch training/job_mu.sh            # mu_whitened.npy   (BETWEEN the stages)
-    sbatch training/job_diffusion.sh     # stage 2  -> runs/diffusion_whitened
-    sbatch validation/job_archive.sh     # -> archive_wh13   (sampling, ~3 h)
-    sbatch validation/job_validate.sh 5.0    # -> validation/plots/lam5.0
-    sbatch validation/job_validate.sh 4.6
+Python 3.11, then `pip install -r requirements.txt`.  Install `torch` first, matching
+your accelerator (ROCm / CUDA / CPU wheels -- see the top of that file).  `device.py`
+uses the GPU when there is one and falls back to the CPU with autocast off.
+
+Credentials: `build_dataset.py` downloads SWOT from the AVISO FTP (`AVISO_USER`,
+`AVISO_PASS`) and DUACS from Copernicus Marine (`copernicusmarine login`, or
+`COPERNICUSMARINE_SERVICE_USERNAME` / `_PASSWORD`).
+
+The trained weights (`runs/baseline_whitened/best.pt`, 8.5 MB, and
+`runs/diffusion_whitened/best.pt`, 94.5 MB) and the finished product
+(`SR_duacs_total.nc`, ~108 GB) are on Zenodo; no data is in this repository.
+
+Every job script below is a SLURM header plus a single `srun python ...` line, so
+without SLURM just run that line.
+
+## 1. Try the network on a short period
+
+The quickest useful thing: build a few months of data, sample the model on it, and
+look at the result.  No training -- it uses the published weights.
+
+    # in build_dataset.py set TEST_ONLY = True (and TEST_START / TEST_END), then
+    python build_dataset.py all              # -> sr_dataset/sr_duacs_to_swot_<period>.nc
+    sbatch training/job_index.sh             # patch_index.npz (keeps norm_stats.npz)
+    python training/build_cache.py           # cache_ssha.npy, cache_sla.npy
+    sbatch training/job_target.sh            # cache_ssha_wh.npy
+    sbatch training/job_mu.sh                # mu_whitened.npy, from the downloaded stage 1
+    sbatch validation/job_archive.sh --split test --days 10 --out archive_try
+    sbatch validation/job_validate.sh 3.3    # -> validation/plots/lam3.3/
+    jupyter lab notebooks/view_day.ipynb     # set DAY, run all
+
+Keep `norm_stats.npz` as it ships: it holds the constants the published weights were
+trained with, and `job_index` no longer overwrites it.  A short period has its own
+mean and standard deviation, and normalising with those would feed the network
+something it was never trained on.
+
+## 2. Retrain the model
+
+Build the full record (`TEST_ONLY = False`, `DATE_START` / `DATE_END` in
+`build_dataset.py`), then compute your own normalisation, because now the constants
+must match the data you train on:
+
+    python build_dataset.py all
+    sbatch training/job_index.sh --recompute-stats
+    python training/build_cache.py
+    sbatch training/job_target.sh            # whitened target (the one that works)
+    sbatch training/job_baseline.sh          # stage 1 -> runs/baseline_whitened
+    sbatch training/job_mu.sh                # mu over the record   (BETWEEN the stages)
+    sbatch training/job_diffusion.sh         # stage 2 -> runs/diffusion_whitened
+    for S in 10 13 16 20; do                 # re-fit sigma_max -- not optional
+        python validation/diag_patch_psd.py --sigma-max $S --out psd_smax$S
+    done
+    sbatch validation/job_archive.sh         # -> archive_wh13
     sbatch validation/job_validate.sh 3.3
-    sbatch validation/job_validate.sh 1.0    # uninflated
 
-`build_dataset.py` must run first of all (it downloads SWOT from AVISO and DUACS from
-Copernicus Marine and grids them); then `job_index`; and `job_mu` between the two
-training stages.  Without SLURM, each job script is a header plus one
-`srun python ...` line -- run that line directly.
+`job_index` first, `job_mu` between the two training stages.  Re-fitting `sigma_max`
+is not optional -- see Details.
 
-Two checks, on the produced data rather than on the code:
+## 3. Validate
 
-    sbatch production/job_check_record.sh    # every day present once, openable, right
-                                             # shapes, no gaps, sane per-year statistics
-    sbatch production/job_merge.sh --verify  # the merged file against the per-day
-                                             # checksums -- run BEFORE deleting product/
+`job_validate.sh <lambda>` runs the whole suite on an archive and writes
+`validation/plots/lam<lambda>/`: CRPS and rank histograms, RMSE, coherence with SWOT,
+swath-geometry spectra and cross-scale transfer, bicoherence, the offset diagnostics
+and daily maps.  It inflates the archive itself, so give it the lambda you want.
+
+Spectra and cross-scale transfer pooled over the whole record:
+
+    sbatch validation/job_total.sh 3.3       # train + val + test
+    sbatch validation/job_fullperiod.sh      # 1993-2026, one array task per year
+    sbatch validation/job_fullperiod_combine.sh
+
+If you downloaded `SR_duacs_total.nc` instead of running the model, everything above
+still works -- no GPU, no weights.  Turn its days into the archive format first:
+
+    python validation/archive_from_dataset.py --dataset SR_duacs_total.nc \
+           --split test --days 40 --out archive_wh13
+    sbatch validation/job_validate.sh 1.0    # its members are ALREADY inflated at 3.3
+    python validation/swath_fullperiod.py --dataset SR_duacs_total.nc --year 2020
+
+Scoring against SWOT needs the training dataset too, since SWOT is the truth; the
+notebook and the spectra work without it.
+
+## 4. Produce the full dataset
+
+`production/` holds the scripts that made the published 1993-2026 product from
+`DUACS_full.nc` (`job_produce.sh`, then `job_merge.sh` to merge the per-day files
+into `SR_duacs_total.nc`, plus two integrity checks).  It is ~442 GPU-hours and
+~108 GB; the result is on Zenodo, so you only need this to rebuild it.
 
 ## Details
 
@@ -64,7 +129,7 @@ target's, and three trainings of this architecture needed 13, 16 and 11.  Re-fit
 after any retraining, before building an archive, or the comparison is confounded.
 
 - There are three possible value for the inflation parameter lambda:
-      - lambda = 3.3 flattens the the rank-histogram (option retained for the production of the fully super-resolved dataset).
+      - lambda = 3.3 flattens the rank-histogram (option retained for the production of the fully super-resolved dataset).
       - lambda = 4.6 minimizes the spread-skill.
       - lambda = 5 minimizes the CRPS.
   The three criteria do not agree on one width, which is itself the finding: a
@@ -72,60 +137,10 @@ after any retraining, before building an archive, or the comparison is confounde
 
 - Each member uses a fix random noise across days to maintain coherence over time.
 
-## The super-resolved dataset (`production/`)
-
-    sbatch production/job_produce.sh     # full record, ~442 GPU-hours
-
-Input `DUACS_full.nc`: DUACS L4 `sla`, 1993-01-01 .. 2026, 12,069 days.
-Output `product/YYYY/sr_nordic_sla_YYYYMMDD.nc` (~9.7 MB/day), merged by
-`sbatch production/job_merge.sh` into the single `SR_duacs_total.nc` (~108 GB)
-published on Zenodo.
-
-| variable | dims | content |
-|---|---|---|
-| `sla_duacs` | time, duacs_latitude, duacs_longitude | DUACS input, native 1/8 deg (unmodified) |
-| `sla_mu` | time, latitude, longitude | stage-1 deterministic mean |
-| `sla` | time, realization, latitude, longitude | 8 diffusion members, inflated lambda 3.3 above 200 km |
-| `sla_mean` | time, latitude, longitude | mean of the 8 members |
-| `quality_flag` | time, latitude, longitude | CF bitmask, below |
-
-`quality_flag` carries only conditions with MEASURED degradation or provenance:
-
-| bit | meaning | reason |
-|---|---|---|
-| 1 | `near_coast` (< 25 km of DUACS land) | The CRPS skill is better offshore: 28% better over DUACS offshore, 16% at 10-25 km, 5% within 10 km |
-| 2 | `input_out_of_distribution` | DUACS gradient energy below the training-period 1st percentile for this day |
-| 4 | `no_swot_validation` | before 2023-07-26: nothing independent to validate against |
-| 8 | `in_training_period` | 2023-07-26 .. 2025-02-28: agreement with SWOT is not an independent test |
-
-
-## What is not in this repository
-
-| item | size | where it comes from |
-|---|---|---|
-| `SR_duacs_total.nc` | ~108 GB | the super-resolved dataset -- Zenodo |
-| `runs/*/best.pt` | 8.5 MB + 94.5 MB | trained stage-1 / stage-2 weights -- Zenodo |
-| `DUACS_full.nc` | 1.2 GB | CMEMS `cmems_obs-sl_glo_phy-ssh_my_allsat-l4-duacs-0.125deg_P1D`, `sla`, 62-78N, 18W-20E |
-| `sr_dataset/sr_duacs_to_swot_<period>.nc` | 0.8 GB | DUACS/SWOT training pairs: `python build_dataset.py all` |
-| `downloads*/Science/` | ~1.2 GB | SWOT L3 LR SSH Expert v2.0.1 passes, downloaded by the same command; kept, because the swath geometry is read from them |
-| `cache_*.npy`, `mu_whitened.npy`, `patch_index.npz` | ~4.5 GB | regenerated: `training/build_cache.py`, `job_index.sh`, `job_target.sh`, `job_mu.sh` |
-| `archive_*/`, `validation/plots/*/daily/` | ~6 GB | regenerated: `validation/job_archive.sh`, `job_validate.sh` |
-
-`norm_stats.npz` IS included (2.4 KB): it holds the normalisation constants the
-network was trained with, so inference works without the training dataset.  So are
-the small results needed to rebuild the target, and the summary figures:
-`runs/native_vs_collocated/native_vs_collocated.json` (the measured gridding artifact
-the whitened target is built from), the training histories, and every validation
-figure except the daily maps.
-
 ## Running outside LUMI
 
-Python 3.11, `pip install -r requirements.txt`.  Install `torch` first, matching your
-accelerator (ROCm / CUDA / CPU wheels -- see the top of that file).  `device.py`
-selects the GPU when there is one and falls back to the CPU with autocast off, so
-nothing is hard-wired to AMD.
-
-Three site-specific things, all outside the python:
+Nothing in the python is hard-wired to AMD or to LUMI.  Three site-specific things,
+all outside it:
 
 - **The SLURM account** is not in the job scripts: `export SBATCH_ACCOUNT=project_XXXXXXXXX`.
 - **The partitions** `small-g` (1 GPU), `small` (CPU) and `debug` (CPU, short) are
@@ -137,20 +152,3 @@ Three site-specific things, all outside the python:
 
 One GPU with >= 32 GB is comfortable (stage 2 trains at batch 32 on 96x96 patches);
 full-field sampling is tiled and fits in much less.
-
-## Using the published dataset without running the model
-
-Downloading `SR_duacs_total.nc` from Zenodo is enough to look at the product and to
-recompute its spectra and cross-scale transfer -- no GPU, no weights, no training data:
-
-    jupyter lab notebooks/view_day.ipynb                       # set DAY, run all
-    python validation/swath_fullperiod.py --dataset SR_duacs_total.nc --year 2020
-    python validation/swath_fullperiod.py --combine
-
-Scoring it against SWOT additionally needs the training dataset, since SWOT is the
-truth.  With that in place, turn dataset days into the archive format every
-diagnostic reads:
-
-    python validation/archive_from_dataset.py --dataset SR_duacs_total.nc \
-           --split test --days 40 --out archive_wh13
-    sbatch validation/job_validate.sh 1.0    # its members are ALREADY inflated at 3.3

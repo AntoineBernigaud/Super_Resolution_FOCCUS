@@ -20,5 +20,6 @@ while [ ! -f "$REPO/env.sh" ] && [ "$REPO" != "/" ]; do REPO="$(dirname "$REPO")
 cd "$REPO" || exit 1
 mkdir -p logs
 source env.sh
-# patch_index.npz + norm_stats.npz -- inputs to every dataset, must run first
+# patch_index.npz (input to every dataset), must run first.  norm_stats.npz ships
+# with the repo and is KEPT; pass --recompute-stats only to train your own model.
 srun python training/build_patch_index.py "$@"

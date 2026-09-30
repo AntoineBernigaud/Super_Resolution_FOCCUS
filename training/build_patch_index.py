@@ -10,6 +10,8 @@ up front:
 
 Reads ssha one day at a time (3.7 MB/step); never holds the 3.1 GB array.
 """
+import argparse
+
 import numpy as np
 from netCDF4 import Dataset as NC4
 
@@ -32,6 +34,14 @@ def box_counts(ii, i0, j0, ph, pw):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--recompute-stats", action="store_true",
+                    help="overwrite norm_stats.npz with this dataset's own "
+                         "normalisation.  Only for training a model from scratch: "
+                         "the published weights need the constants that ship with "
+                         "the repository.")
+    args = ap.parse_args()
+
     ph_f, pw_f = C.PATCH_F
     ph_c, pw_c = C.PATCH_C
     oi_c, oj_c = C.patch_origins()
@@ -137,8 +147,25 @@ def main():
     shared_mean = stats["ssha_clipped_mean"]
     shared_std = stats["ssha_clipped_std"]
     print(f"\n  shared normalisation -> mean {shared_mean:+.6f}  std {shared_std:.6f}")
-    np.savez(C.STATS, shared_mean=shared_mean, shared_std=shared_std,
-             clip_m=C.CLIP_M, **stats)
+    # norm_stats.npz ships with the repository: it holds the constants the PUBLISHED
+    # weights were trained with, and the network is only meaningful with those.  A
+    # short or shifted period gives different constants, so overwriting it would
+    # silently break inference with those weights -- hence keep-by-default, and
+    # --recompute-stats only when training a model of your own from end to end.
+    if C.STATS.exists() and not args.recompute_stats:
+        old = np.load(C.STATS)
+        print(f"  keeping {C.STATS.name} as it is: mean "
+              f"{float(old['shared_mean']):+.6f}  std {float(old['shared_std']):.6f}"
+              f"\n  (the constants the published weights were trained with; pass "
+              f"--recompute-stats to overwrite when training your own model)")
+        d = abs(float(old["shared_mean"]) - shared_mean) / max(shared_std, 1e-9)
+        if d > 0.05:
+            print(f"  NOTE: this period's mean differs from it by {d:.2f} std -- "
+                  f"expected if you built a short or a different period")
+    else:
+        np.savez(C.STATS, shared_mean=shared_mean, shared_std=shared_std,
+                 clip_m=C.CLIP_M, **stats)
+        print(f"  wrote {C.STATS.name}")
 
     # --- coverage diagnostics ----------------------------------------------------
     print("\n" + "=" * 62)
@@ -162,7 +189,7 @@ def main():
         dates=dates.astype("datetime64[D]").astype(np.int64),
         oi_c=np.array(oi_c), oj_c=np.array(oj_c),
         patch_c=np.array(C.PATCH_C), patch_f=np.array(C.PATCH_F))
-    print(f"\nwrote {C.PATCH_INDEX.name} and {C.STATS.name}")
+    print(f"\nwrote {C.PATCH_INDEX.name}")
 
     _plots(cov_y, day_cov, dates, oi_c, oj_c)
 
