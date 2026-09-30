@@ -61,6 +61,15 @@ CMEMS_PASS = ""
 
 build_dataset.py can then called with python 'build_dataset.py all'.
 
+Remark: the network used to produce the final dataset was trained, validated and tested using the following dates:
+
+| split | start | end |
+| -------- | -------- | -------- |
+| train     |    2023-07-26      |    2025-02-28      |
+| val    |    2025-03-21      |    2025-06-30      |
+| test    |   2025-07-21       |    2025-11-17      |
+
+
 ## 1. Try the network on a short period
 
 The quickest useful thing: build a few months of data, sample the model on it, and
