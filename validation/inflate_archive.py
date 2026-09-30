@@ -25,7 +25,7 @@ construction.  Two consequences for the figures made from this archive:
   * a single member is no longer a draw from the model.  The 111-223 km bands
     overshoot to 1.74-2.48x at lam 5 -- unavoidable with a smooth filter, since the
     true deficit is above ~223 km and anything reaching there also lifts bands that
-    were already correct.  So EKE, cross-scale transfer and bicoherence measured here
+    were already correct.  So EKE and the cross-scale transfer measured here
     are NOT the model's; read them from the uninflated archive.  They are produced
     anyway to show what the calibration costs.
 """

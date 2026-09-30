@@ -5,34 +5,23 @@ still runs ~8x hot in local transfer (11.78 +-1.89 against the truth's 1.49 +-2.
 Transfer is a triple product, so it is not constrained by marginal statistics: a field
 can carry exactly the right power in every band and still flux energy between them at
 the wrong rate, if the PHASE RELATIONS between bands are wrong.  This measures that
-directly, two ways.
+directly.
 
-1. THE SURROGATE.  For every window and every field, the transfer is recomputed on a
-   phase-randomised copy: the 2-D FFT amplitude of eta is preserved EXACTLY and the
-   phases are replaced by those of a Gaussian field.  The surrogate therefore has the
-   identical power spectrum -- identical PSD, identical EKE, identical everything
-   marginal -- and no phase organisation at all.  Reading:
+THE SURROGATE.  For every window and every field, the transfer is recomputed on a
+phase-randomised copy: the 2-D FFT amplitude of eta is preserved EXACTLY and the
+phases are replaced by those of a Gaussian field.  The surrogate therefore has the
+identical power spectrum -- identical PSD, identical EKE, identical everything
+marginal -- and no phase organisation at all.  Reading:
 
-     T_surrogate ~ 0 for every field   -> ALL transfer is phase organisation, and the
-                                          model's excess is entirely a phase defect
-     T_surrogate large                 -> the spectrum shape alone drives transfer and
-                                          the excess is partly an energy defect
+  T_surrogate ~ 0 for every field   -> ALL transfer is phase organisation, and the
+                                       model's excess is entirely a phase defect
+  T_surrogate large                 -> the spectrum shape alone drives transfer and
+                                       the excess is partly an energy defect
 
-   Taking the phases from `fft2` of a real Gaussian field, rather than drawing angles
-   directly, is what guarantees the Hermitian symmetry that keeps the surrogate real.
-   Geostrophy is applied AFTER randomisation, so u, v stay consistent with eta and the
-   only thing destroyed is phase.
-
-2. BICOHERENCE.  The normalised bispectrum along-track,
-
-       b^2(k1,k2) = |E[F(k1) F(k2) F*(k1+k2)]|^2
-                    / ( E[|F(k1) F(k2)|^2] . E[|F(k1+k2)|^2] )
-
-   is amplitude-independent by construction and lies in [0, 1]: 0 means the three
-   modes have independent phases, 1 means they are locked.  It is the scale-by-scale
-   statement of the same question, and unlike the transfer it cannot be moved by
-   getting the energy wrong.  Reported over LOCAL triads (k1 and k2 within RATIO of
-   each other), which is the band the local transfer sums over.
+Taking the phases from `fft2` of a real Gaussian field, rather than drawing angles
+directly, is what guarantees the Hermitian symmetry that keeps the surrogate real.
+Geostrophy is applied AFTER randomisation, so u, v stay consistent with eta and the
+only thing destroyed is phase.
 
 Windows, geometry, shells and the window function are taken from `swath_splits` /
 `swath_transfer` unchanged, so the numbers sit on the same footing as the transfer
@@ -60,88 +49,13 @@ def phase_randomise(eta, rng):
     return np.fft.ifft2(np.abs(F) * np.exp(1j * np.angle(Fr))).real
 
 
-def bicoherence_acc(eta, win, acc, nb_keep):
-    """Accumulate bispectrum numerator and the two denominators, per column."""
-    ny = eta.shape[0]
-    z = (eta - eta.mean(axis=0, keepdims=True)) * win[:, None]
-    F = np.fft.rfft(z, axis=0)[:nb_keep]                       # (nb_keep, ncol)
-    i = np.arange(nb_keep)
-    s = i[:, None] + i[None, :]
-    ok = s < nb_keep
-    s_c = np.where(ok, s, 0)
-    for c in range(F.shape[1]):
-        f = F[:, c]
-        M = f[:, None] * f[None, :]
-        F3 = f[s_c]
-        acc["num"] += np.where(ok, M * np.conj(F3), 0)
-        acc["d12"] += np.where(ok, np.abs(M) ** 2, 0)
-        acc["d3"] += np.where(ok, np.abs(F3) ** 2, 0)
-        acc["n"] += 1
-
-
-
 def _plots(report, out):
-    """Bicoherence and the surrogate test.  Until 2026-09-16 this script wrote only
-    JSON, so the one diagnostic CLAUDE.md calls "the instrument to use" was never
-    actually looked at.
-    """
+    """The surrogate test: real transfer against the phase-randomised copy."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     for name, rep in report.items():
-        wl = np.asarray(rep["bicoherence_lambda_km"], float)
-        bic, berr = rep["bicoherence"], rep["bicoherence_err"]
-        if "bicoherence_dilution" in rep:
-            dil = np.asarray(rep["bicoherence_dilution"], float)
-        else:
-            # Reconstructed EXACTLY for reports written before the dilution curve was
-            # stored: nb_keep is the length of the wavelength axis and RATIO is a
-            # module constant, so the local mask and the i+j >= nb_keep cut are both
-            # recoverable.  Without this an old report would replot with no shading,
-            # which is the misleading figure this shading exists to prevent.
-            nbk = len(wl)
-            ii = np.arange(nbk)
-            R = np.where(ii[None, :] > 0, ii[:, None] / np.maximum(ii[None, :], 1), 0.0)
-            loc = (R <= RATIO) & (R >= 1 / RATIO) & (ii[:, None] > 0)
-            S = ii[:, None] + ii[None, :]
-            dil = np.array([float((S[r][loc[r]] >= nbk).mean())
-                            if loc[r].any() else np.nan for r in range(nbk)])
-        fields = list(bic)
-
-        fig, ax = plt.subplots(figsize=(9, 5.6))
-        # Shade where the row average is diluted by structural zeros.  Two levels: a
-        # light band where it has started and a hatched one where the row is mostly
-        # zeros and carries no information at all.
-        for thr, al, hatch, lab in ((0.05, 0.10, None, "diluted >5% by structural zeros"),
-                                    (0.50, 0.18, "///", "row is mostly structural zeros")):
-            bad = np.isfinite(dil) & (dil > thr) & (wl > 0)
-            if bad.any():
-                ax.axvspan(np.nanmin(wl[bad]), np.nanmax(wl[bad]), color="0.5",
-                           alpha=al, hatch=hatch, lw=0, label=lab, zorder=0)
-        for k in fields:
-            c = np.asarray(bic[k], float)
-            e = np.asarray(berr[k], float)
-            g = np.isfinite(c) & (wl > 0) & (c > 0)
-            col = "k" if "truth" in k.lower() else None
-            ln, = ax.plot(wl[g], c[g], lw=1.8, color=col,
-                          label=k + (" (reference)" if "truth" in k.lower() else ""))
-            ax.fill_between(wl[g], np.maximum(c[g] - e[g], 1e-6), c[g] + e[g],
-                            color=ln.get_color(), alpha=0.22, lw=0)
-        ax.set_xscale("log"); ax.set_yscale("log")
-        ax.invert_xaxis()
-        ax.set_xlabel("wavelength [km]")
-        ax.set_ylabel(r"mean bicoherence $b^2$ over local triads")
-        ax.set_title(f"{name} -- phase coupling between scales\n"
-                     "amplitude-independent by construction: it cannot be moved by "
-                     "getting the energy wrong", fontsize=10)
-        ax.grid(alpha=0.3, which="both")
-        ax.legend(fontsize=8)
-        fig.tight_layout()
-        f = out / f"bicoherence_{name}.png"
-        fig.savefig(f, dpi=130); plt.close(fig)
-        print(f"wrote {f}")
-
         # the surrogate test: real transfer against the phase-randomised copy
         keys = [k for k in rep if isinstance(rep[k], dict) and "real" in rep[k]]
         if not keys:
@@ -183,18 +97,10 @@ def main():
     ap.add_argument("--fields", nargs="+",
                     default=["SWOT truth", "DUACS", "mu (deterministic)",
                              "diffusion member", "diffusion mean of 8"],
-                    help="cost is per field -- surrogates are drawn for each -- so a "
-                         "5-field run is ~2.5x a 2-field one.  DUACS and mu are the "
-                         "CONTROLS and are the reason to pay it: both are nearly "
-                         "devoid of real signal below ~40 km, so they show what this "
-                         "estimator returns when the band is empty -- DUACS reads "
-                         "0.0153 at 25 km, five times the member and 22x the truth, "
-                         "with a 48% error bar.  Quote no bicoherence excess without "
-                         "them.  `diffusion mean of 8` does NOT behave like the "
-                         "cascade under averaging (transfer 18.6 -> 1.3): b^2 is "
-                         "normalised, so averaging shrinks numerator and denominator "
-                         "together and the ratio need not fall -- measured 0.0045 at "
-                         "25 km, ABOVE the member's 0.0029.")
+                    help="cost is per field: `--surrogates` phase-randomised copies "
+                         "are drawn for each, so a 5-field run costs ~2.5x a 2-field "
+                         "one.  DUACS and mu are the controls -- both are nearly "
+                         "devoid of real signal below ~40 km.")
     ap.add_argument("--replot", action="store_true",
                     help="rebuild the figures from an existing phase.json in --out and "
                          "exit, without redoing the surrogates (the expensive part)")
@@ -229,12 +135,6 @@ def main():
     lat0, lat1 = C.LAT0, C.LAT0 + C.NLAT_C * C.DLAT_C
     lon0, lon1 = C.LON0, C.LON0 + C.NLON_C * C.DLON_C
 
-    # A local triad needs i + j < nb_keep with j >= i/RATIO, so nb_keep caps the
-    # SMALLEST resolvable wavelength at about nb_keep/(1+1/RATIO) bins -- at 48 that
-    # was bin 32, lambda ~ 16 km, and every row below it came out as an exact 0.0000
-    # that looked like a measurement of "no phase coupling" and was really an empty
-    # average.  Keep all of them.
-    nb_keep = L // 2 + 1
     report = {}
 
     for spec in args.archives:
@@ -255,12 +155,6 @@ def main():
 
         realT = {f: [] for f in fields}
         surrT = {f: [] for f in fields}
-        bic = {f: dict(num=np.zeros((nb_keep, nb_keep), complex),
-                       d12=np.zeros((nb_keep, nb_keep)),
-                       d3=np.zeros((nb_keep, nb_keep)), n=0) for f in fields}
-        # per-window copies, for a jackknife: b^2 is a ratio of averages, so its
-        # error cannot be taken from a per-window standard deviation
-        bic_w = {f: [] for f in fields}
         nwin = 0
 
         for fp in files:
@@ -328,14 +222,6 @@ def main():
                         surrT[k].append(np.mean(
                             [flux(phase_randomise(eta, rng))
                              for _ in range(args.surrogates)], axis=0))
-                        one = dict(num=np.zeros((nb_keep, nb_keep), complex),
-                                   d12=np.zeros((nb_keep, nb_keep)),
-                                   d3=np.zeros((nb_keep, nb_keep)), n=0)
-                        bicoherence_acc(eta, win, one, nb_keep)
-                        for key in ("num", "d12", "d3"):
-                            bic[k][key] += one[key]
-                        bic[k]["n"] += one["n"]
-                        bic_w[k].append(one)
                     nwin += 1
             print(f"  [{name}] {date}  windows {nwin}", flush=True)
 
@@ -361,46 +247,6 @@ def main():
                   f"{b.mean():>10.2f} +-{se_b:<4.2f}"
                   f"{b.mean()/a.mean() if a.mean() else np.nan:>18.3f}")
 
-        freq = np.fft.rfftfreq(L, d=d_along)[:nb_keep]
-        wl = np.where(freq > 0, 1 / np.maximum(freq, 1e-30), np.inf) / 1000.0
-        print(f"\n  === mean bicoherence b^2 over LOCAL triads ===")
-        print(f"  {'lambda km':>10}" + "".join(f"{k[:14]:>16}" for k in fields))
-        i = np.arange(nb_keep)
-        R = np.where(i[None, :] > 0, i[:, None] / np.maximum(i[None, :], 1), 0.0)
-        local = (R <= RATIO) & (R >= 1 / RATIO) & (i[:, None] > 0)
-        curves = {}
-        err = {}
-        for k in fields:
-            B = bic[k]
-
-            def rowmean(num, d12, d3):
-                b2 = np.abs(num) ** 2 / np.maximum(d12 * d3, 1e-300)
-                return np.array([np.nanmean(b2[r][local[r]]) if local[r].any()
-                                 else np.nan for r in range(nb_keep)])
-
-            curves[k] = rowmean(B["num"], B["d12"], B["d3"])
-            # delete-one jackknife over windows
-            J = np.array([rowmean(B["num"] - o["num"], B["d12"] - o["d12"],
-                                  B["d3"] - o["d3"]) for o in bic_w[k]])
-            nj = len(J)
-            err[k] = np.sqrt((nj - 1) / nj * np.nansum((J - J.mean(0)) ** 2, axis=0))
-        valid = [r for r in range(2, nb_keep) if local[r].any()]
-        for r in valid[::max(1, len(valid) // 14)]:
-            print(f"  {wl[r]:10.1f}" + "".join(
-                f"{curves[k][r]:10.4f}+-{err[k][r]:<5.4f}" for k in fields))
-        report[name]["bicoherence"] = {k: curves[k].tolist() for k in fields}
-        report[name]["bicoherence_err"] = {k: err[k].tolist() for k in fields}
-        report[name]["bicoherence_lambda_km"] = wl.tolist()
-        # How much of each row average is STRUCTURAL ZERO.  bicoherence_acc only fills
-        # triads with i + j < nb_keep (`ok = s < nb_keep`), but `local` does not
-        # exclude the rest, so they enter the mean as exact zeros and drag it down.
-        # Measured here rather than guessed, and plotted, because a row that is mostly
-        # structural zeros is NOT a measurement of "no phase coupling" -- an earlier
-        # run with nb_keep = 48 printed a column of convincing 0.0000s for that reason.
-        S = i[:, None] + i[None, :]
-        dil = np.array([float((S[r][local[r]] >= nb_keep).mean())
-                        if local[r].any() else np.nan for r in range(nb_keep)])
-        report[name]["bicoherence_dilution"] = dil.tolist()
 
     _plots(report, out)
 
