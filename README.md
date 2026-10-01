@@ -30,6 +30,12 @@ The trained weights (`runs/baseline_whitened/best.pt`, 8.5 MB, and
 `runs/diffusion_whitened/best.pt`, 94.5 MB) are on Zenodo;
 The fully super-resolved dataset is available on Zenodo.
 
+For a quick look there is a smaller copy on
+[Hugging Face](https://huggingface.co/datasets/AntoineBernigaud/Super_Resolution_FOCCUS):
+the two checkpoints, `SR_duacs_total.nc` cut to the test period, and the SWOT truth
+for the same days.  `python download_data.py` fetches all three into the places the
+code expects (`--what weights` / `dataset` / `truth` for one at a time).
+
 ## Dependencies and running outside of LUMI
 
 Requires torch and Python 3.11.
@@ -107,8 +113,8 @@ Build the full record (`TEST_ONLY = False`, `DATE_START` / `DATE_END` in
 
 `job_validate.sh <lambda>` runs the whole suite on an archive and writes
 `validation/plots/lam<lambda>/`: CRPS and rank histograms, RMSE, coherence with SWOT,
-swath-geometry spectra and cross-scale transfer, bicoherence, the offset diagnostics
-and daily maps.  Lambda being the inflation parameter.
+swath-geometry spectra and cross-scale transfer, the phase-surrogate test, the offset
+diagnostics and daily maps.  Lambda being the inflation parameter.
 
 Spectra and cross-scale transfer pooled over the whole record:
 
@@ -124,8 +130,9 @@ still works.  Turn its days into the archive format first:
     sbatch validation/job_validate.sh 1.0    # its members are ALREADY inflated at 3.3
     python validation/swath_fullperiod.py --dataset SR_duacs_total.nc --year 2020
 
-Scoring against SWOT needs the training dataset too, since SWOT is the truth; the
-notebook and the spectra work without it.
+Scoring against SWOT needs the truth alongside it -- `python download_data.py --what
+truth` for the test period, or `build_dataset.py` for the whole record.  The notebook
+and the spectra work without it, and simply skip the SWOT panels.
 
 ## Details
 

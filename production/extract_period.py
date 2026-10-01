@@ -6,8 +6,8 @@ and the uint8 flags move across byte for byte -- nothing is decoded to float and
 re-encoded, and the output is bit-identical to the same days of the input.
 
     python production/extract_period.py --split test
-    python production/extract_period.py --start 2025-07-21 --end 2025-11-17 \
-           --out SR_duacs_total_test_period.nc
+    python production/extract_period.py --src sr_duacs_to_swot.nc --split test \
+           --out sr_dataset/sr_duacs_to_swot_test_period.nc
 
 Cheap enough to run without a job: the test period is 120 days, ~1.1 GB in and out.
 """
@@ -21,7 +21,19 @@ from netCDF4 import Dataset
 
 import config as C
 
-EPOCH = np.datetime64("1950-01-01")
+def epoch_of(tvar):
+    """The reference date of a CF time axis: 'days since YYYY-MM-DD[ ...]'.
+
+    The product counts days since 1950 and the training dataset counts days since
+    its own first day, so this is read from the file rather than assumed.
+    """
+    units = getattr(tvar, "units", "days since 1950-01-01")
+    if "since" not in units:
+        raise SystemExit(f"cannot read the time units: {units!r}")
+    kind, _, ref = units.partition(" since ")
+    if kind.strip() != "days":
+        raise SystemExit(f"time is in {kind!r}, only 'days since ...' is handled")
+    return np.datetime64(ref.strip().split()[0])
 
 
 def main():
@@ -48,7 +60,8 @@ def main():
                                            format="NETCDF4") as o:
         for v in src.variables.values():
             v.set_auto_maskandscale(False)
-        days = EPOCH + np.asarray(src["time"][:], np.int64).astype("timedelta64[D]")
+        epoch = epoch_of(src["time"])
+        days = epoch + np.asarray(src["time"][:], np.int64).astype("timedelta64[D]")
         sel = np.nonzero((days >= start) & (days <= end))[0]
         if not len(sel):
             raise SystemExit(f"no day of {args.src} falls in {start}..{end}")
@@ -62,19 +75,33 @@ def main():
             kw = dict(zlib=bool(filt.get("zlib")), complevel=filt.get("complevel", 4),
                       shuffle=bool(filt.get("shuffle")))
             if ch not in ("contiguous", None):
-                kw["chunksizes"] = ch
+                # a chunk may be deeper than the slice we keep (the training dataset
+                # chunks 138 days at a time); netCDF refuses a chunk bigger than its
+                # dimension
+                kw["chunksizes"] = [min(c, len(o.dimensions[d]))
+                                    for c, d in zip(ch, v.dimensions)]
             fill = v.getncattr("_FillValue") if "_FillValue" in v.ncattrs() else None
             ov = o.createVariable(name, v.dtype, v.dimensions, fill_value=fill, **kw)
             ov.set_auto_maskandscale(False)
             ov.setncatts({k: v.getncattr(k) for k in v.ncattrs() if k != "_FillValue"})
             if "time" not in v.dimensions:
                 ov[:] = v[:]
-        for k, i in enumerate(sel):
+        # Copy in BLOCKS, not day by day: the source may be chunked many days deep
+        # (the training dataset uses 138), and a per-day read would decompress that
+        # whole chunk once per day -- minutes become an hour.
+        contiguous = bool(np.all(np.diff(sel) == 1))
+        step = 30
+        for k0 in range(0, len(sel), step):
+            k1 = min(k0 + step, len(sel))
             for name, v in src.variables.items():
-                if "time" in v.dimensions:
-                    o.variables[name][k] = v[i]
-            if k % 20 == 0:
-                print(f"  {k + 1}/{len(sel)}  {days[i]}", flush=True)
+                if "time" not in v.dimensions:
+                    continue
+                if contiguous:
+                    o.variables[name][k0:k1] = v[sel[k0]:sel[k1 - 1] + 1]
+                else:
+                    for k in range(k0, k1):
+                        o.variables[name][k] = v[sel[k]]
+            print(f"  {k1}/{len(sel)}  {days[sel[k1 - 1]]}", flush=True)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         g = {k: src.getncattr(k) for k in src.ncattrs()}
