@@ -54,6 +54,14 @@ full-field sampling is tiled and fits in much less.
 
 ## 0. Building the dataset
 
+### 3 options:
+
+#### 1) (Easiest option to look at some results) Download gridded DUACS, SWOT and SR data over the test period
+
+run 'python download_data.py' to download the optimized weights and the data. Then you can run notebooks/view_day.ipynb with jupyter to look at them and compare RMSE. This option does not allow to compute the trajectory dependent metrics (power spectra, cross-scale transfer ...) as you need the original SWOT data to get the original swath coordinates needed to compute these metrics along the swaths. This is only available following option 2 below but requires a CMEMS and AVISO account.
+
+#### 2) Download DUACS and SWOT data to either train or just do inference (requires CMEMS and AVISO account)
+
 First modify the first arguments in build_dataset.py. The values by default where the one used for the production of the final dataset.
 - TEST_ONLY can be set to True to only download data during the testing period defined by TEST_START and TEST_END.
 - If TEST_ONLY is set to False, it will download the data between the dates DATE_START and DATE_END.
@@ -75,11 +83,15 @@ Remark: the network used to produce the final dataset was trained, validated and
 | val    |    2025-03-21      |    2025-06-30      |
 | test    |   2025-07-21       |    2025-11-17      |
 
+#### 3) If you are only interested in getting the final product, download the fully super resolved dataset from Zenodo
+
+~100 Go.
+
 
 ## 1. Try the network on a short period
 
-The quickest useful thing: build a few months of data, sample the model on it, and
-look at the result.  No training -- it uses the published weights.
+Build a few months of data, sample the model on it, and
+look at the result. It uses the published weights.
 
     # in build_dataset.py set TEST_ONLY = True (and TEST_START / TEST_END), then
     python build_dataset.py all              # -> sr_dataset/sr_duacs_to_swot_<period>.nc
