@@ -87,7 +87,11 @@ Remark: the network used to produce the final dataset was trained, validated and
 
 #### 3) If you are only interested in getting the final product, download the fully super resolved dataset from Zenodo
 
-~100 Go.
+~108 Go in all, published one calendar year at a time as `SR_duacs_total_<year>.nc`
+(~3.5 Go each), because Zenodo takes 50 Go per record. Download as many years as you
+want and drop them next to this README, in `data/` or in `product_years/`: every
+script and the notebook read one year, several or the whole record the same way
+(`product.py` resolves it). See section 4 for what can be validated on which year.
 
 
 ## 1. Try the network on a short period
