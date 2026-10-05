@@ -18,6 +18,13 @@ Three modes:
     --year YYYY      accumulate the model fields for one year -> sums npz
     --truth          accumulate SWOT over the whole record    -> sums npz
     --combine        pool every npz in --out and plot
+
+The model fields come from whatever product you have (product.py resolves it): the
+whole record, or a single SR_duacs_total_<year>.nc from Zenodo, which is all
+`--year <that year>` reads.  This is the one diagnostic that works on a pre-SWOT
+year, because the windows borrow their geometry from the record and no truth is
+needed; `--truth` does need the training dataset, and without it the figures carry
+the model curves alone.
 """
 import argparse
 from pathlib import Path
@@ -28,6 +35,7 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import binary_erosion
 
 import config as C
+import product as P
 import swath_geom as SG
 from data import load_index, load_stats
 from swath_splits import pack_windows
@@ -90,23 +98,22 @@ def accumulate(date, GI, GM, acc, args, kfix, GL=None):
 def iter_days(args, mean):
     """(day, sla_duacs, sla_mu, sla members) for one year, in metres minus `mean`.
 
-    Reads either the merged dataset (--dataset SR_duacs_total.nc, what Zenodo
-    publishes) or the per-day files under product/ (what produce_sr.py writes).
+    Reads the published product, whichever files of it are present (product.py),
+    or the per-day files under product/ when --product is given.
     """
-    if args.dataset:
-        with Dataset(args.dataset) as ds:
-            ds.set_auto_mask(True)
-            t = np.asarray(ds["time"][:], np.int64)
-            days = np.datetime64("1950-01-01") + t.astype("timedelta64[D]")
-            sel = [i for i, d in enumerate(days)
-                   if int(str(d.astype("datetime64[D]"))[:4]) == args.year]
+    if not args.product:
+        with P.Product(args.dataset) as prod:
+            sel = [d for d in prod.dates if str(d)[:4] == str(args.year)]
+            if not sel:
+                raise SystemExit(
+                    f"the product you have holds no day of {args.year} "
+                    f"({prod.dates[0]} .. {prod.dates[-1]}).  Download that year "
+                    f"(SR_duacs_total_{args.year}.nc) or pass --year within range.")
             if args.max_days:
                 sel = sel[:args.max_days]
-            for i in sel:
-                yield (days[i].astype("datetime64[D]"),
-                       ds["sla_duacs"][i].filled(np.nan) - mean,
-                       ds["sla_mu"][i].filled(np.nan) - mean,
-                       ds["sla"][i].filled(np.nan) - mean)
+            for d in sel:
+                f = prod.day(d, ("sla_duacs", "sla_mu", "sla"))
+                yield (d, f["sla_duacs"] - mean, f["sla_mu"] - mean, f["sla"] - mean)
         return
     files = sorted(Path(args.product, str(args.year)).glob("sr_nordic_sla_*.nc"))
     if args.max_days:
@@ -136,10 +143,12 @@ def main():
     g.add_argument("--year", type=int)
     g.add_argument("--truth", action="store_true")
     g.add_argument("--combine", action="store_true")
-    ap.add_argument("--product", default="product",
-                    help="directory of per-day files written by produce_sr.py")
+    ap.add_argument("--product", default=None,
+                    help="directory of per-day files written by produce_sr.py; the "
+                         "default is to resolve the merged product (product.py)")
     ap.add_argument("--dataset", default=None,
-                    help="the merged SR_duacs_total.nc instead of --product")
+                    help="a product file, directory or glob, if the automatic "
+                         "resolution picks the wrong one")
     ap.add_argument("--out", default="validation/plots/full_period/swath")
     ap.add_argument("--lam-min-km", type=float, default=4.0)
     ap.add_argument("--lam-max-km", type=float, default=512.0)
@@ -217,13 +226,19 @@ def combine(out, kfix):
             a = tot.setdefault(name, {"P": 0.0, "E": 0.0, "T": 0.0, "n": 0})
             a[q] = a[q] + z[k]
     names = [f for f in MODEL + [TRUTH] if f in tot]
-    missing = [y for y in range(1993, 2027)
-               if not (out / "chunks" / f"model_{y}.npz").exists()]
+    # Title and warning follow the chunks that are actually here: with the product
+    # published one year at a time, a reader may legitimately have only one.
+    years = sorted(int(c.stem[6:]) for c in chunks if c.name.startswith("model_"))
+    if not years:
+        raise SystemExit(f"no model chunk in {out}/chunks -- run --year first")
+    span = (f"{years[0]}-{years[-1]}" if len(years) > 1 else str(years[0]))
+    missing = [y for y in range(years[0], years[-1] + 1) if y not in years]
     if missing:
-        print(f"WARNING: no chunk for years {missing}")
+        print(f"WARNING: no chunk for years {missing} inside {span}")
     nm = int(tot[MODEL[0]]["n"]); nt = int(tot.get(TRUTH, {"n": 0})["n"])
-    tag = (f"model fields: {ndays:,} days, {nm:,} windows   |   "
-           f"SWOT: its whole record, {nt:,} windows")
+    tag = (f"model fields: {span}, {ndays:,} days, {nm:,} windows"
+           + (f"   |   SWOT: its whole record, {nt:,} windows" if nt else
+              "   |   no SWOT truth (training dataset not present)"))
     print(tag)
 
     nb = len(kfix) - 1
@@ -241,7 +256,7 @@ def combine(out, kfix):
             a.loglog(wl[1:], (tot[f_][key] / tot[f_]["n"])[1:], label=f_, **STYLE[f_])
         a.set_xlabel("wavelength [km]"); a.set_ylabel(ylab); a.invert_xaxis()
         a.grid(alpha=0.3, which="both"); a.legend(frameon=False, fontsize=8)
-        a.set_title(f"{'SSH' if key == 'P' else 'EKE'} spectrum, FULL PERIOD 1993-2026\n"
+        a.set_title(f"{'SSH' if key == 'P' else 'EKE'} spectrum, {span}\n"
                     + tag, fontsize=10, fontweight="bold")
         fig.savefig(out / f"{fname}.png", dpi=135, bbox_inches="tight"); plt.close(fig)
         print(f"wrote {out}/{fname}.png")
@@ -258,7 +273,7 @@ def combine(out, kfix):
     a.axhline(0.0, color="k", lw=0.8); a.invert_xaxis()
     a.set_xlabel("wavelength [km]"); a.set_ylabel("total transfer (10$^{-6}$ W/m$^3$)")
     a.grid(alpha=0.3, which="both"); a.legend(frameon=False, fontsize=8)
-    a.set_title("Total cross-scale EKE transfer, FULL PERIOD 1993-2026\n" + tag,
+    a.set_title(f"Total cross-scale EKE transfer, {span}\n" + tag,
                 fontsize=10, fontweight="bold")
     fig.savefig(out / "cross_scale_transfer_full_period.png", dpi=135, bbox_inches="tight")
     plt.close(fig)

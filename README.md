@@ -19,6 +19,7 @@ Note on the branches: the original version (CGAN) is in the CGAN branch. With mo
 ## Structure of the repo
 
     build_dataset.py                       the producer of the training dataset
+    product.py                             finds the published product (1 file, 1 year or all)
     training/                              build caches and target, train, mu + their jobs
     production/                            Used to produce the super-resolved 1993-2026 dataset
     validation/                            archive, diagnostics + their jobs
@@ -30,7 +31,8 @@ The trained weights (`runs/baseline_whitened/best.pt`, 8.5 MB, and
 `runs/diffusion_whitened/best.pt`, 94.5 MB) are on Zenodo;
 The fully super-resolved dataset is available on Zenodo.
 
-For a quick look there is a smaller copy on
+The full product is on Zenodo as one file per year (see section 4).  For a quick look
+there is a smaller copy on
 [Hugging Face](https://huggingface.co/datasets/AntoineBernigaud/Super_Resolution_FOCCUS):
 the two checkpoints, `SR_duacs_total.nc` cut to the test period, and the SWOT truth
 for the same days.  `python download_data.py` fetches all three into the places the
@@ -134,17 +136,44 @@ Spectra and cross-scale transfer pooled over the whole record:
     sbatch validation/job_fullperiod.sh      # 1993-2026, one array task per year
     sbatch validation/job_fullperiod_combine.sh
 
-If you downloaded `SR_duacs_total.nc` instead of running the model, everything above
-still works.  Turn its days into the archive format first:
+## 4. Validate the published product, without running the model
 
-    python validation/archive_from_dataset.py --dataset SR_duacs_total.nc \
-           --split test --days 40 --out archive_wh13
-    sbatch validation/job_validate.sh 1.0    # its members are ALREADY inflated at 3.3
-    python validation/swath_fullperiod.py --dataset SR_duacs_total.nc --year 2020
+The product is published **one calendar year at a time** -- `SR_duacs_total_<year>.nc`,
+about 2 GB each -- because Zenodo takes 50 GB per record and the whole 1993-2026
+record is 115 GB.  Every yearly file has the same variables, dimensions and
+attributes as the whole record; only the time axis is shorter, so nothing needs to
+know which one you have.  Put the files you downloaded next to this README, or in
+`data/`, or in `product_years/`; `product.py` resolves one file, one year, several
+years or the whole record identically, and no script needs a path.
 
-Scoring against SWOT needs the truth alongside it -- `python download_data.py --what
-truth` for the test period, or `build_dataset.py` for the whole record.  The notebook
-and the spectra work without it, and simply skip the SWOT panels.
+    python validation/archive_from_dataset.py --split test --days 40 --out archive_wh13
+    sbatch validation/job_validate.sh 1.0    # the members are ALREADY inflated at 3.3
+    jupyter lab notebooks/view_day.ipynb     # set DAY to a day of the year you have
+
+The days scored are the product's own days intersected with the SWOT record, so a
+single year needs no extra arguments; `--dataset <path|dir|glob>` overrides the
+automatic choice.  **Lambda must be 1.0** -- the published members already carry the
+scale-selective inflation.
+
+**What works for which year.**  Everything that scores against SWOT needs the truth
+as well: `python download_data.py --what truth` covers the 2025 test period, and
+`build_dataset.py` the whole SWOT record (2023-07-26 onwards).
+
+| year you downloaded | CRPS, RMSE, rank, coherence, overlay | spectra + cross-scale transfer | notebook maps |
+| --- | --- | --- | --- |
+| 2023-2025 (SWOT era) | yes, with the truth | yes | yes |
+| 1993-2022 | no truth exists | yes | yes, without the SWOT panels |
+
+Spectra for a pre-SWOT year need no truth at all, because the windows borrow their
+pass geometry from the SWOT record:
+
+    python validation/swath_fullperiod.py --year 2020
+    python validation/swath_fullperiod.py --combine      # titles itself with the years present
+
+To produce the yearly files from the whole record (producer side, already done):
+
+    sbatch production/job_split_years.sh                 # 34 years, 8 at a time
+    sbatch --array=32 production/job_split_years.sh      # just 1993 + 32 = 2025
 
 ## Details
 

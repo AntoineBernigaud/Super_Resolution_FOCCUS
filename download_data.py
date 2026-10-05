@@ -25,6 +25,12 @@ the DUACS `sla` that goes with it).  It is NOT needed to run the model or to loo
 the product; it is what the notebook and the validation scripts compare against, and
 without it every SWOT panel is skipped.
 
+The full 1993-2026 product is NOT here: at 115 GB it is published on Zenodo one
+calendar year at a time, as SR_duacs_total_<year>.nc.  Drop any of those next to
+this script (or in data/) and every script and the notebook pick them up -- see
+product.py, which resolves one file, a year, several years or the whole record
+identically.
+
 Uses `huggingface_hub` when it is installed (resumable, cached, checksum-checked) and
 falls back to a plain streamed HTTPS download otherwise.
 """

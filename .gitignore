@@ -11,6 +11,7 @@
 /archive*/
 /product/
 /product_test/
+/product_years/
 /SR_duacs_total*
 *.crc.json
 
